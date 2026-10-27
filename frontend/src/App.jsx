@@ -3,7 +3,7 @@ import {
   Activity, ArrowDownRight, ArrowUpRight, BadgeCheck, CalendarDays, Check,
   ChevronDown, CircleHelp, Cloud, CreditCard, FileText, Ghost, Heart, LayoutDashboard,
   LockKeyhole, Menu, MoreHorizontal, Music2, Newspaper, Plus, Search, ShieldCheck,
-  Sparkles, TicketCheck, Wallet, X, Clapperboard, Dumbbell, CircleDot
+  Sparkles, TicketCheck, Wallet, X, Clapperboard, Dumbbell, CircleDot, Upload
 } from 'lucide-react';
 import { detectRecurring, normalizeMerchant, parseStatement, sampleTransactions, transactionId } from './parsing.js';
 
@@ -37,10 +37,19 @@ function StatCard({ icon: Icon, label, value, detail, accent = '' }) {
   return <article className={`stat-card ${accent}`}><div className="stat-icon"><Icon size={17}/></div><p>{label}</p><strong>{value}</strong><span>{detail}</span></article>;
 }
 
+function ThemePicker({ theme, setTheme }) {
+  return <label className="theme-picker"><span>Theme</span><select value={theme} onChange={event => setTheme(event.target.value)} aria-label="Choose color theme"><option value="haunted">Haunted slate</option><option value="plum">Midnight plum</option><option value="candlelight">Candlelight</option></select></label>;
+}
+
 function App() {
-  const [transactions, setTransactions] = useState(sampleTransactions);
-  const [fileName, setFileName] = useState('Sample ledger · May—Oct 2026');
-  const [isSample, setIsSample] = useState(true);
+  const [transactions, setTransactions] = useState([]);
+  const [fileName, setFileName] = useState('No statement loaded');
+  const [isSample, setIsSample] = useState(false);
+  const [screen, setScreen] = useState('import');
+  const [theme, setTheme] = useState('plum');
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [itemEffect, setItemEffect] = useState(null);
   const [remembrance, setRemembrance] = useState(false);
   const [decisions, setDecisions] = useState({});
   const [names, setNames] = useState({});
@@ -59,13 +68,13 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const aiStatus = privacyStatus;
   const inputRef = useRef(null);
+  const effectTimer = useRef(null);
   const findings = useMemo(() => detectRecurring(transactions, separatedTransactions).map(item => ({ ...item, category: categories[item.id] || item.category, displayName: names[item.id] || item.merchant, status: decisions[item.id] || 'active' })), [transactions, separatedTransactions, decisions, names, categories]);
-  const visible = findings.filter(item => (filter === 'all' || item.status === filter) && `${item.displayName} ${item.merchant} ${item.category}`.toLowerCase().includes(searchQuery.toLowerCase()));
+  const visible = findings.filter(item => (filter === 'all' || item.status === filter || itemEffect?.id === item.id) && `${item.displayName} ${item.merchant} ${item.category}`.toLowerCase().includes(searchQuery.toLowerCase()));
   const active = findings.filter(item => item.status === 'active');
   const monthlySpend = findings.filter(item => item.cadence === 'Monthly').reduce((total, item) => total + item.amount, 0);
-  const monthlyHike = findings.filter(item => item.cadence === 'Monthly' && item.increasePercent).reduce((total, item) => total + (item.amount - item.previousAmount), 0);
   const annualized = findings.reduce((sum, item) => sum + item.amount * annualMultiplier(item.cadence), 0);
-  const savingsEstimate = findings.filter(item => item.status === 'exorcised').reduce((sum, item) => sum + item.amount * annualMultiplier(item.cadence), 0);
+  const priceHikes = findings.filter(item => item.increasePercent > 0);
   const [showToast, setShowToast] = useState(false);
 
   useEffect(() => {
@@ -87,24 +96,34 @@ function App() {
     notify.timeout = window.setTimeout(() => setShowToast(false), 3000);
   }
 
-  async function onFile(event) {
-    const file = event.target.files?.[0]; if (!file) return;
+  async function importFile(file) {
+    if (!file) return;
+    setIsImporting(true); setImportError('');
     try {
       const rows = await parseStatement(file);
-      setTransactions(rows); setFileName(file.name); setIsSample(false); setDecisions({}); setNames({}); setSeparatedTransactions([]); setFilter('active');
+      setTransactions(rows); setFileName(file.name); setIsSample(false); setDecisions({}); setNames({}); setSeparatedTransactions([]); setFilter('active'); setScreen('dashboard');
       notify(`${detectRecurring(rows).length} recurring patterns found in ${file.name}.`);
-    } catch (error) { notify(error.message || 'Could not read that statement.'); }
-    finally { event.target.value = ''; }
+    } catch (error) { setImportError(error.message || 'Could not read that statement.'); notify(error.message || 'Could not read that statement.'); }
+    finally { setIsImporting(false); if (inputRef.current) inputRef.current.value = ''; }
+  }
+
+  function onFile(event) {
+    importFile(event.target.files?.[0]);
   }
 
   function loadSample() {
     setTransactions(sampleTransactions()); setFileName('Sample ledger · May—Oct 2026'); setIsSample(true);
-    setDecisions({}); setNames({}); setSeparatedTransactions([]); setFilter('active'); notify('Sample ledger loaded. No real statement is involved.');
+    setDecisions({}); setNames({}); setSeparatedTransactions([]); setFilter('active'); setImportError(''); setScreen('dashboard'); notify('Sample ledger loaded. No real statement is involved.');
   }
 
   function decide(item, status) {
     setDecisions(current => ({ ...current, [item.id]: status }));
-    notify(status === 'exorcised' ? 'Marked for you to cancel. This is an estimate; no account or payment was changed.' : status === 'cancelled' ? 'Recorded as cancelled by you. This app did not cancel it.' : status === 'kept' ? 'Kept in your ledger.' : 'Decision undone.');
+    if (status === 'kept' || status === 'cancelled') {
+      window.clearTimeout(effectTimer.current);
+      setItemEffect({ id: item.id, kind: status === 'kept' ? 'revive' : 'rest' });
+      effectTimer.current = window.setTimeout(() => setItemEffect(null), 1250);
+    }
+    notify(status === 'exorcised' ? 'Marked for you to cancel. This is an estimate; no account or payment was changed.' : status === 'cancelled' ? 'Recorded as cancelled by you. This app did not cancel it.' : status === 'kept' ? (remembrance ? 'Kept in the ledger.' : 'Ghost reviewed · kept in your ledger.') : 'Decision undone.');
   }
 
   function beginAi(item, task) {
@@ -150,7 +169,27 @@ function App() {
   }, [transactions, findings, separatedTransactions]);
   const maxMonth = Math.max(1, ...monthSeries.map(item => item.total));
 
-  return <div className={`app-frame ${remembrance ? 'remembrance' : ''}`}>
+  return <div className={`app-frame theme-${theme} ${remembrance ? 'remembrance' : ''}`}>
+    {screen === 'import' ? <section className="import-screen">
+      <header className="import-header">
+        <a className="brand" href="#top" aria-label="Still Charging home"><span className="brand-sigil">✳</span><span>STILL <b>CHARGING</b></span></a>
+        <div className="import-header-controls"><ThemePicker theme={theme} setTheme={setTheme}/><button className="mode-switch" aria-pressed={remembrance} onClick={() => setRemembrance(value => !value)}><span className="mode-flower">{remembrance ? <Ghost size={16}/> : <Heart size={16}/>}</span><span>{remembrance ? 'Return to Halloween mode' : 'For someone who has passed'}</span></button></div>
+      </header>
+      <main className="import-content" id="top">
+        <div className="import-copy"><p className="eyebrow"><span className="eyebrow-mark">✦</span> {remembrance ? 'A LEDGER HELD WITH CARE' : 'PRIVATE SUBSCRIPTION REVIEW'}</p><h1>{remembrance ? <>A gentler ledger<br/><em>for a life remembered.</em></> : <>Still <em>charging?</em></>}</h1><p>{remembrance ? 'A calm place to review recurring charges connected to someone you remember. There is no rush; every choice is yours.' : 'Find recurring charges, review price changes, and decide what stays. Your statement is analyzed in this browser.'}</p></div>
+        <div className="upload-dropzone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); importFile(event.dataTransfer.files?.[0]); }}>
+          <div className="upload-mark"><Upload size={22}/></div><h2>Bring a statement to review</h2><p>Choose a CSV or text-based PDF. The statement is read in this browser and never sent to an AI service.</p>
+          <button className="button-primary" disabled={isImporting} onClick={() => inputRef.current?.click()}><Upload size={16}/>{isImporting ? 'Reading statement…' : 'Choose a statement'}</button>
+          <input ref={inputRef} type="file" accept=".csv,.pdf,text/csv,application/pdf" hidden onChange={onFile}/>
+          <small>Scanned or password-protected PDFs aren’t supported.</small>
+          {isImporting && <span className="import-progress" role="status">Reading and analyzing locally…</span>}
+          {importError && <p className="import-error" role="alert">{importError}</p>}
+        </div>
+        <div className="import-secondary"><span>Prefer to look around first?</span><button className="button-ghost" onClick={loadSample}>Explore synthetic sample data <ArrowUpRight size={14}/></button></div>
+        <div className="import-privacy"><LockKeyhole size={17}/><div><strong>Your statement stays on this device.</strong><span>Recurring-charge detection works without AI. If you choose an AI feature later, you’ll review exactly what is shared first.</span></div><button onClick={() => setModal({ kind: 'privacy' })}>Privacy details <ArrowUpRight size={13}/></button></div>
+      </main>
+      <footer className="import-footer"><span>STILL CHARGING <i>✳</i></span><span>OPEN MODELS. YOUR CALL.</span></footer>
+    </section> : <>
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
       <a className="brand" href="#top" aria-label="Still Charging home"><span className="brand-sigil">✳</span><span>STILL <b>CHARGING</b></span></a>
       <div className="side-label">YOUR SPACE</div>
@@ -180,22 +219,17 @@ function App() {
       <header className="topbar">
         <button className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileNav(value => !value)}><Menu size={20}/></button>
         <div className="breadcrumb"><span>STILL CHARGING</span><span className="crumb-slash">/</span><b>Your ledger</b></div>
-        <div className="topbar-right"><span className="local-state"><i/>PRIVATE SESSION</span><span className="top-date"><CalendarDays size={14}/> OCT 2026</span><button className="icon-button help-button" aria-label="Privacy information" onClick={() => setModal({ kind: 'privacy' })}><CircleHelp size={18}/></button></div>
+        <div className="topbar-right"><ThemePicker theme={theme} setTheme={setTheme}/><span className="local-state"><i/>PRIVATE SESSION</span><span className="top-date"><CalendarDays size={14}/> OCT 2026</span><button className="icon-button help-button" aria-label="Privacy information" onClick={() => setModal({ kind: 'privacy' })}><CircleHelp size={18}/></button></div>
       </header>
 
       <div className="content-wrap">
         <section className="page-intro">
-          <div className="intro-copy"><p className="eyebrow"><span className="eyebrow-mark">✦</span> {remembrance ? 'A LEDGER HELD WITH CARE' : 'THE OCTOBER LEDGER'}</p>
+          <div className="intro-copy"><p className="eyebrow"><span className="eyebrow-mark">✦</span> {remembrance ? 'A LEDGER HELD WITH CARE' : 'PRIVATE SUBSCRIPTION REVIEW'}</p>
             <h1>{remembrance ? <>A gentler ledger<br/><em>for a life remembered.</em></> : <>Still <em>charging?</em></>}</h1>
-            <p className="intro-subtitle">{remembrance ? 'A calm place to review recurring charges connected to someone you remember. There is no rush; every choice is yours.' : 'The subscriptions that linger after the trial, the price hike, the forgotten sign-up. Review each one at your pace.'}</p>
+            <p className="intro-subtitle">{remembrance ? 'A calm place to review recurring charges connected to someone you remember. There is no rush; every choice is yours.' : 'Find recurring charges, review price changes, and decide what stays. Your statement is analyzed in this browser.'}</p>
             <div className="intro-meta"><span className="file-chip"><FileText size={13}/>{fileName}</span><span className="data-note"><LockKeyhole size={13}/> Parsed on this device</span></div>
           </div>
-          <div className="hero-illustration" aria-label={remembrance ? 'Marigold candle illustration' : 'Moonlit subscription grave marker'}>
-            <div className="hero-orbit"/><div className="hero-moon"/>
-            {!remembrance ? <><div className="hero-grave"><span>SUBSCRIPTION</span><strong>2021—?</strong><i>rest in peace</i></div><div className="hero-grave-small"/><span className="hero-spark spark-one">✦</span><span className="hero-spark spark-two">✧</span></> : <div className="marigold-bouquet"><span>✿</span><span>✿</span><span>✿</span><i/></div>}
-            <div className="hero-ground"/>
-          </div>
-          <div className="intro-actions"><button className="button-primary" onClick={() => inputRef.current?.click()}><Plus size={16}/> Open a statement</button><button className="button-ghost" onClick={loadSample}>Explore sample data <ArrowUpRight size={14}/></button><input ref={inputRef} type="file" accept=".csv,.pdf,text/csv,application/pdf" hidden onChange={onFile}/></div>
+          <div className="intro-actions">{findings.length > 0 ? <><button className="button-primary" onClick={() => { setFilter(active.length ? 'active' : 'all'); document.querySelector('.subscriptions-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{active.length ? `Review ${active.length} candidates` : 'Review recurring charges'} <ArrowDownRight size={15}/></button><button className="button-ghost" onClick={() => inputRef.current?.click()}>Import another statement <Plus size={14}/></button></> : <><button className="button-primary" onClick={() => inputRef.current?.click()}><Plus size={16}/> Import statement</button><button className="button-ghost" onClick={loadSample}>Use sample data <ArrowUpRight size={14}/></button></>}<input ref={inputRef} type="file" accept=".csv,.pdf,text/csv,application/pdf" hidden onChange={onFile}/></div>
           <p className="file-limit">CSV or text-based PDF <span>·</span> Scanned and password-protected PDFs aren’t supported</p>
         </section>
 
@@ -204,15 +238,20 @@ function App() {
         </section>
 
         <section className="stats-grid" aria-label="Ledger summary">
-          <StatCard icon={Wallet} label="MONTHLY SUBSCRIPTIONS" value={money(monthlySpend)} detail={`${active.length} still awaiting a decision`} accent="stat-moss"/>
-          <StatCard icon={ArrowUpRight} label="PRICE RAISED" value={monthlyHike ? `+${money(monthlyHike)}` : '—'} detail={monthlyHike ? 'Increase found in your latest cycle' : 'No recent increases found'} accent="stat-red"/>
-          <StatCard icon={TicketCheck} label="EST. YEARLY CHARGES" value={money(annualized)} detail="Cadence annualized; assumes repeats continue" accent="stat-amber"/>
-          <StatCard icon={ArrowDownRight} label="POTENTIAL SAVINGS" value={money(savingsEstimate)} detail="Only items you mark to cancel; estimate, not actual savings" accent="stat-red"/>
-          <StatCard icon={Activity} label="PATTERNS FOUND" value={String(findings.length).padStart(2, '0')} detail="Based on repeat dates and amounts" accent="stat-bone"/>
+          <StatCard icon={Wallet} label="RECURRING CHARGES" value={findings.length} detail="Patterns found in statement rows" accent="stat-moss"/>
+          <StatCard icon={Ghost} label="NEEDS REVIEW" value={active.length} detail="Suspected · not yet confirmed" accent="stat-amber"/>
+          <StatCard icon={ArrowUpRight} label="PRICE INCREASES" value={priceHikes.length} detail={priceHikes.length ? 'Observed against a previous charge' : 'No increases detected'} accent="stat-red"/>
+          <StatCard icon={TicketCheck} label="EST. YEARLY COST" value={findings.length && annualized > 0 ? money(annualized) : '—'} detail={findings.length && annualized > 0 ? 'Annualized from observed cadence' : 'Available when billing cadence is known'} accent="stat-bone"/>
         </section>
 
+        {!remembrance && <button className={`ghosts-spotted ${active.length ? '' : 'ghosts-empty'}`} onClick={() => { setFilter('active'); document.querySelector('.subscriptions-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} aria-label={active.length ? `${active.length} ghosts spotted, go to recurring charge candidates` : 'No unreviewed recurring charge candidates'}>
+          <span className="pumpkin-row" aria-hidden="true">{active.length ? Array.from({ length: active.length }, (_, index) => <span className="pumpkin" key={index}>🎃</span>) : <Ghost size={16}/>}</span>
+          <span><strong>{active.length ? `${active.length} ghosts spotted` : 'No ghosts waiting for review'}</strong><small>{active.length ? ` ${active.length} recurring-charge ${active.length === 1 ? 'candidate' : 'candidates'} · select to review` : 'All detected candidates have a decision'}</small></span>
+          {active.length > 0 && <ArrowDownRight size={15} className="ghosts-arrow"/>}
+        </button>}
+
         <section className="dashboard-grid">
-          <div className="subscriptions-panel">
+          <div className="subscriptions-panel" id="review-queue">
             <div className="panel-heading"><div><p className="eyebrow">{remembrance ? 'A GENTLE REVIEW' : 'THE USUAL SUSPECTS'}</p><h2>Recurring charges <span>{findings.length}</span></h2></div><button className="print-button" onClick={printList} disabled={!visible.length}><FileText size={14}/> Print list</button></div>
             <div className="list-controls"><div className="filter-tabs" role="group" aria-label="Filter subscription list">
               {[['active', 'Needs a decision'], ['all', 'All'], ['kept', 'Kept'], ['exorcised', 'Plan to cancel'], ['cancelled', 'Cancelled by you']].map(([value, label]) => <button key={value} className={filter === value ? 'selected' : ''} onClick={() => setFilter(value)}>{label}</button>)}
@@ -220,7 +259,8 @@ function App() {
             <div className="subscription-list">
               {!visible.length ? <div className="list-empty"><Sparkles size={23}/><strong>{findings.length ? 'Nothing in this view.' : 'The ledger is quiet—for now.'}</strong><span>Import a statement or choose the sample ledger to see recurring patterns.</span><button className="button-ghost" onClick={loadSample}>Show sample ledger</button></div> : visible.map(item => {
                 const Icon = icons[item.icon] || CircleDot;
-                return <article key={item.id} className={`subscription-item ${item.status}`}>
+                return <article key={item.id} className={`subscription-item ${item.status} ${itemEffect?.id === item.id ? `effect-${itemEffect.kind}` : ''}`}>
+                  {itemEffect?.id === item.id && <span className="ghost-action-animation" aria-hidden="true">👻</span>}
                   <div className="tombstone-edge"/>
                   <div className="service-icon"><Icon size={19}/></div>
                   <div className="subscription-main"><div className="subscription-title-row"><h3>{item.displayName}</h3><span className="cadence-pill">{item.cadence}</span>{item.increasePercent > 0 && <span className="hike-pill"><ArrowUpRight size={12}/> {item.increasePercent}% increase</span>}</div><p className="merchant-description">{item.merchant}</p><div className="item-evidence"><span>{item.category}</span><i>·</i><span>{item.occurrences} charges</span><i>·</i><span>{item.status === 'kept' ? 'User reviewed' : item.status === 'active' ? 'Suspected' : item.status === 'cancelled' ? 'Cancelled by user' : 'Plan to cancel'}</span><i>·</i><span>{item.confidence} confidence</span><i>·</i><span>Last seen {dateLabel(item.lastDate)}</span></div><p className="item-epitaph">{getEpitaph(item, remembrance)}</p>
@@ -239,8 +279,8 @@ function App() {
           </div>
 
           <aside className="insight-column">
-            <article className="spend-card"><div className="aside-heading"><div><p className="eyebrow">RECENT HISTORY</p><h3>Your recurring outflow</h3></div><button className="icon-button" aria-label="Monthly overview"><MoreHorizontal size={18}/></button></div><div className="spend-total"><strong>{money(monthlySpend)}</strong><span>/ month estimated</span></div><div className="bar-chart" role="img" aria-label="Recurring charges by month from the imported transactions"><div className="chart-y-labels"><span>{money(maxMonth)}</span><span>{money(Math.round(maxMonth/2))}</span><span>₹0</span></div><div className="chart-bars">{monthSeries.map((item, index) => <div key={item.label + index} className={`chart-bar ${index === monthSeries.length - 1 ? 'current' : ''}`} style={{ height: `${Math.max(3, item.total / maxMonth * 100)}%` }} title={`${item.label} · ${money(item.total)}`}/>)}</div></div><div className="chart-months">{monthSeries.map((item, index) => <span key={item.label + index}>{item.label}</span>)}</div><div className="chart-caption"><span><i/> Recurring charges detected</span><span>Based on imported rows</span></div></article>
-            <article className="price-alert"><div className="alert-icon"><ArrowUpRight size={16}/></div><div><p className="eyebrow">PRICE HIKE WATCH</p><h3>{findings.some(item => item.increasePercent) ? 'One familiar charge grew.' : 'No price hikes spotted.'}</h3><p>{findings.some(item => item.increasePercent) ? 'Compare the latest charge with the one before it. Check the service before deciding.' : 'We compare recent matching charges. A change is flagged only when it rises by more than 3%.'}</p>{findings.some(item => item.increasePercent) && <button onClick={() => { setFilter('all'); document.querySelector('.subscriptions-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Review changed charges <ArrowDownRight size={13}/></button>}</div></article>
+            <article className="spend-card"><div className="aside-heading"><div><p className="eyebrow">RECENT HISTORY</p><h3>Your recurring outflow</h3></div><button className="icon-button" aria-label="Monthly overview"><MoreHorizontal size={18}/></button></div><div className="spend-total"><strong>{money(monthlySpend)}</strong><span>/ month estimated</span></div><div className="bar-chart" role="img" aria-label="Recurring charges by month from the imported transactions"><div className="chart-y-labels"><span>{money(maxMonth)}</span><span>{money(Math.round(maxMonth/2))}</span><span>₹0</span></div><div className="chart-bars">{monthSeries.map((item, index) => <div key={item.label + index} className={`chart-bar ${index === monthSeries.length - 1 ? 'current' : ''}`} style={{ height: `${Math.max(3, item.total / maxMonth * 100)}%` }} title={`${item.label} · ${money(item.total)}`}>{!remembrance && item.total > 0 && <span className="chart-ghost" aria-hidden="true">👻</span>}</div>)}</div></div><div className="chart-months">{monthSeries.map((item, index) => <span key={item.label + index}>{item.label}</span>)}</div><div className="chart-caption"><span><i/> Recurring charges detected</span><span>Based on imported rows</span></div></article>
+            <article className="price-alert"><div className="alert-icon"><ArrowUpRight size={16}/></div><div><p className="eyebrow">PRICE CHANGE CHECK</p><h3>{priceHikes.length ? `Price creep detected · ${priceHikes.length}` : 'No price hikes spotted.'}</h3><p>{priceHikes.length ? 'Observed increases compared with previous matching charges. Review the evidence before deciding.' : 'A change is flagged only when a matching charge rises by more than 3%.'}</p>{priceHikes.length > 0 && <button onClick={() => { setFilter('all'); document.querySelector('.subscriptions-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>Review changed charges <ArrowDownRight size={13}/></button>}</div></article>
             <article className="model-card privacy-ai-card"><div className="model-head"><div className="model-emblem"><ShieldCheck size={17}/></div><div><p className="eyebrow">PRIVACY & AI</p><h3>Choose how AI works</h3></div></div>
               <fieldset className="mode-options"><legend className="sr-only">AI operating mode</legend>
                 <label><input type="radio" name="ai-mode" checked={aiMode === 'none'} onChange={() => setAiMode('none')}/><span><strong>No AI</strong><small>All detection stays here</small></span></label>
@@ -259,6 +299,7 @@ function App() {
     </main>
 
     {mobileNav && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNav(false)}/>}
+    </>}
 
     {modal?.kind === 'consent' && <Modal eyebrow={aiMode === 'cloud' ? 'CLOUD AI · CONFIRM THIS REQUEST' : 'LOCAL AI · CONFIRM THIS REQUEST'} title={aiMode === 'cloud' ? 'Review what leaves this device.' : 'Review what goes to Ollama.'} onClose={() => setModal(null)}>
       <p className="modal-copy">{aiMode === 'cloud' ? 'Groq will receive the fields below for this one request. A merchant name can still be sensitive. The full statement remains in this browser.' : 'This request will go to the Ollama service configured on your machine. It will not fall back to a cloud provider.'}</p>
