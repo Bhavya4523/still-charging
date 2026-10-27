@@ -1,0 +1,17 @@
+{
+  "name": "still-charging",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["frontend", "backend"],
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend \"npm:dev --workspace=backend\" \"npm:dev --workspace=frontend\"",
+    "build": "npm run build --workspace=frontend",
+    "test": "node --test backend/test/*.test.js frontend/test/*.test.js",
+    "evaluate:matching": "node scripts/evaluate-matching.mjs",
+    "start": "npm run start --workspace=backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": { "node": ">=20" }
+}
